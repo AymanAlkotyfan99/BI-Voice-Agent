@@ -1,0 +1,6 @@
+connection_topic
+schema_topic
+extracted_rows_topic
+clean_rows_topic
+load_rows_topic
+metadata_topic

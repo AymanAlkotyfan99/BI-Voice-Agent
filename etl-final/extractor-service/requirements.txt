@@ -1,0 +1,8 @@
+Django
+djangorestframework
+kafka-python
+requests
+pymysql
+psycopg2-binary
+pandas
+openpyxl

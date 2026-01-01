@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Start Django server in the background
+python metadata-service/metadata/manage.py runserver 0.0.0.0:8000 &
+
+# Wait for Kafka to be ready
+echo "[METADATA] Waiting for Kafka to be ready..."
+sleep 30
+
+# Start Kafka listener with retry logic
+python -c "
+import sys
+import time
+sys.path.insert(0, '/app/metadata-service/metadata')
+sys.path.insert(0, '/app/shared')
+
+max_retries = 10
+retry_count = 0
+
+while retry_count < max_retries:
+    try:
+        print(f'[METADATA] Attempting to start listener (attempt {retry_count + 1}/{max_retries})...')
+        from api.kafka_listener import start_listener
+        start_listener()
+        break
+    except Exception as e:
+        print(f'[METADATA ERROR] Failed to connect: {e}')
+        retry_count += 1
+        if retry_count < max_retries:
+            print(f'[METADATA] Retrying in 10 seconds...')
+            time.sleep(10)
+        else:
+            print(f'[METADATA] Max retries reached. Exiting.')
+            sys.exit(1)
+"
+
