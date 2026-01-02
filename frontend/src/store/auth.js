@@ -99,10 +99,11 @@ export const useAuthStore = create(
           }
 
           const response = await userAPI.getProfile()
-          const { user } = response.data
+          const { user, workspace } = response.data
           
           set({
             user,
+            workspace: workspace || null,
             isAuthenticated: true,
           })
           

@@ -1,10 +1,13 @@
 from clickhouse_driver import Client
+import os
 
+# Small Whisper uses native protocol (clickhouse_driver) which requires port 9000
+# This is DIFFERENT from Django's HTTP port (8123)
 client = Client(
-    host="localhost",
-    port=9000,
-    user="etl_user",
-    password="etl_pass123",
+    host=os.getenv("CLICKHOUSE_HOST", "localhost"),
+    port=int(os.getenv("CLICKHOUSE_NATIVE_PORT", "9000")),  # Native protocol port
+    user=os.getenv("CLICKHOUSE_USER", "etl_user"),
+    password=os.getenv("CLICKHOUSE_PASSWORD", "etl_pass123"),
 )
 
 def get_schema() -> dict:

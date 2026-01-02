@@ -4,7 +4,7 @@ from openai import OpenAI
 # 🔐 OpenRouter Configuration
 # ============================================================
 
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "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"
 OPENROUTER_MODEL = "google/gemma-3n-e4b-it:free"
 
 client = OpenAI(

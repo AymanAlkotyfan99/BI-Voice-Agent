@@ -9,6 +9,10 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 # ==============================================================================
 # SECURITY SETTINGS
@@ -43,8 +47,10 @@ INSTALLED_APPS = [
     'users',
     'workspace',
     'database',
+    'voice_reports',
 ]
 
+print("CLICKHOUSE_PORT =", os.getenv("CLICKHOUSE_PORT"))
 
 # ==============================================================================
 # MIDDLEWARE
@@ -350,11 +356,21 @@ if os.environ.get('CORS_ORIGIN_WHITELIST'):
 # ==============================================================================
 # CLICKHOUSE CONFIGURATION
 # ==============================================================================
+# ==============================================================================
+# CLICKHOUSE CONFIGURATION (FORCED OVERRIDE)
+# ==============================================================================
 
-CLICKHOUSE_HOST = os.environ.get('CLICKHOUSE_HOST', 'localhost')
-CLICKHOUSE_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
-CLICKHOUSE_USER = os.environ.get('CLICKHOUSE_USER', 'default')
-CLICKHOUSE_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+CLICKHOUSE_HOST = os.getenv('CLICKHOUSE_HOST', 'localhost')
+
+# FORCE ClickHouse HTTP port (ignore Windows env)
+CLICKHOUSE_PORT = int(os.getenv('CLICKHOUSE_PORT', '8123'))
+if CLICKHOUSE_PORT == 9000:
+    CLICKHOUSE_PORT = 8123
+
+CLICKHOUSE_USER = os.getenv('CLICKHOUSE_USER', 'etl_user')
+CLICKHOUSE_PASSWORD = os.getenv('CLICKHOUSE_PASSWORD', 'etl_pass123')
+CLICKHOUSE_DATABASE = os.getenv('CLICKHOUSE_DATABASE', 'etl')
+
 
 
 # ==============================================================================
@@ -362,4 +378,31 @@ CLICKHOUSE_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 # ==============================================================================
 
 ETL_SERVICE_URL = os.environ.get('ETL_SERVICE_URL', 'http://127.0.0.1:8001')
+
+
+# ==============================================================================
+# VOICE REPORTS CONFIGURATION
+# ==============================================================================
+
+# Small Whisper Service
+# Use 127.0.0.1 instead of localhost to avoid DNS resolution issues
+SMALL_WHISPER_URL = os.environ.get('SMALL_WHISPER_URL', 'http://127.0.0.1:8001')
+
+# ClickHouse Database (for Voice Reports)
+CLICKHOUSE_DATABASE = os.environ.get('CLICKHOUSE_DATABASE', 'etl')
+
+# Metabase Configuration
+METABASE_URL = os.environ.get('METABASE_URL', 'http://localhost:3000')
+METABASE_SECRET_KEY = os.environ.get('METABASE_SECRET_KEY', '')
+METABASE_DATABASE_ID = int(os.environ.get('METABASE_DATABASE_ID', '1'))
+METABASE_USERNAME = os.environ.get('METABASE_USERNAME', '')
+METABASE_PASSWORD = os.environ.get('METABASE_PASSWORD', '')
+
+# JWT Embedding
+JWT_ISSUER = os.environ.get('JWT_ISSUER', 'bi-voice-agent')
+JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE', 'metabase')
+
+# Media Files (for audio storage)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 

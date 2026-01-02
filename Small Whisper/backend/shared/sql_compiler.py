@@ -1,4 +1,14 @@
-def compile_sql(intent: dict) -> str:
+def compile_sql(intent: dict, type_casting: list = None) -> str:
+    """
+    Compile intent into SQL with optional type casting.
+    
+    Args:
+        intent: Structured intent with metrics, dimensions, filters, etc.
+        type_casting: Optional list of type casting requirements from validation
+    
+    Returns:
+        Valid SQL query string
+    """
     table = intent["table"]
     metrics = intent.get("metrics", [])
     dimensions = intent.get("dimensions", [])
@@ -8,6 +18,12 @@ def compile_sql(intent: dict) -> str:
 
     if not metrics:
         raise ValueError("Intent must contain at least one metric")
+
+    # Build type casting map
+    cast_map = {}
+    if type_casting:
+        for tc in type_casting:
+            cast_map[tc["column"]] = tc["required_cast"]
 
     select_parts = []
     group_by_parts = []
@@ -29,7 +45,14 @@ def compile_sql(intent: dict) -> str:
         if col == "*":
             select_parts.append(f"{agg}(*) AS {alias}")
         else:
-            select_parts.append(f"{agg}({col}) AS {alias}")
+            # ✅ Apply type casting if needed
+            col_expr = col
+            if col in cast_map:
+                cast_func = cast_map[col]
+                col_expr = f"{cast_func}({col})"
+                print(f"🔧 Type casting applied: {col} → {col_expr}")
+            
+            select_parts.append(f"{agg}({col_expr}) AS {alias}")
 
     sql = f"SELECT {', '.join(select_parts)} FROM {table}"
 

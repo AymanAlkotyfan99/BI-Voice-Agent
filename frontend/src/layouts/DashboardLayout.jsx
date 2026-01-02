@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useAuthStore } from '../store/auth'
 import { 
   Home, Users, Settings, User, LogOut, 
-  UserPlus, LayoutDashboard, Menu, X, Database
+  UserPlus, LayoutDashboard, Menu, X, Database,
+  Mic, Code, BarChart3
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { slideInLeft, sidebarItemVariants } from '../animations/variants'
@@ -39,12 +40,69 @@ function DashboardLayout() {
   }
 
   const navigation = [
-    { name: 'Dashboard', path: '/dashboard', icon: Home, roles: ['manager', 'analyst', 'executive'] },
-    { name: 'Profile', path: '/dashboard/profile', icon: User, roles: ['manager', 'analyst', 'executive'] },
-    { name: 'Database', path: '/dashboard/database', icon: Database, roles: ['manager'] },
-    { name: 'Workspace Settings', path: '/dashboard/workspace', icon: Settings, roles: ['manager'] },
-    { name: 'Members', path: '/dashboard/members', icon: Users, roles: ['manager', 'analyst', 'executive'] },
-    { name: 'Invite Member', path: '/dashboard/invite', icon: UserPlus, roles: ['manager'] },
+    { 
+      name: 'Dashboard', 
+      path: '/dashboard', 
+      icon: Home, 
+      roles: ['manager', 'analyst', 'executive'],
+      description: 'Overview'
+    },
+    { 
+      name: 'Voice Reports', 
+      path: '/dashboard/voice-reports', 
+      icon: Mic, 
+      roles: ['manager'],
+      description: 'Create Reports'
+    },
+    { 
+      name: 'SQL Editor', 
+      path: '/dashboard/sql-editor', 
+      icon: Code, 
+      roles: ['analyst'],
+      description: 'Edit Queries'
+    },
+    { 
+      name: 'Analytics', 
+      path: '/dashboard/analytics', 
+      icon: BarChart3, 
+      roles: ['executive'],
+      description: 'View Insights'
+    },
+    { 
+      name: 'Database', 
+      path: '/dashboard/database', 
+      icon: Database, 
+      roles: ['manager'],
+      description: 'Manage Data'
+    },
+    { 
+      name: 'Members', 
+      path: '/dashboard/members', 
+      icon: Users, 
+      roles: ['manager', 'analyst', 'executive'],
+      description: 'Team'
+    },
+    { 
+      name: 'Invite Member', 
+      path: '/dashboard/invite', 
+      icon: UserPlus, 
+      roles: ['manager'],
+      description: 'Add Users'
+    },
+    { 
+      name: 'Workspace', 
+      path: '/dashboard/workspace', 
+      icon: Settings, 
+      roles: ['manager'],
+      description: 'Settings'
+    },
+    { 
+      name: 'Profile', 
+      path: '/dashboard/profile', 
+      icon: User, 
+      roles: ['manager', 'analyst', 'executive'],
+      description: 'Account'
+    },
   ]
 
   const filteredNavigation = navigation.filter(item => 
@@ -80,10 +138,15 @@ function DashboardLayout() {
       >
         <div className="flex flex-col h-full">
           {/* Logo */}
-          <div className="flex items-center justify-between h-16 px-6 border-b">
+          <div className="flex items-center justify-between h-16 px-6 border-b bg-gradient-to-r from-blue-50 to-indigo-50">
             <div className="flex items-center space-x-2">
-              <LayoutDashboard className="w-8 h-8 text-primary-600" />
-              <span className="text-xl font-bold text-gray-800">BI Voice</span>
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-md">
+                <Mic className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <span className="text-xl font-bold text-gray-800 block leading-tight">BI Voice</span>
+                <span className="text-xs text-gray-600">AI-Powered Analytics</span>
+              </div>
             </div>
             <button
               className="lg:hidden"
@@ -181,11 +244,16 @@ function DashboardLayout() {
           </button>
           
           <div className="flex items-center space-x-4">
-            <span className="text-sm text-gray-600">
+            <span className="text-sm text-gray-600 hidden sm:block">
               Welcome, <span className="font-semibold">{user?.name}</span>
             </span>
-            <span className="badge badge-info">
-              {user?.role}
+            <span className={`
+              px-3 py-1 text-xs font-medium rounded-full
+              ${user?.role === 'manager' ? 'bg-blue-100 text-blue-800' : ''}
+              ${user?.role === 'analyst' ? 'bg-purple-100 text-purple-800' : ''}
+              ${user?.role === 'executive' ? 'bg-green-100 text-green-800' : ''}
+            `}>
+              {user?.role?.toUpperCase()}
             </span>
           </div>
         </header>

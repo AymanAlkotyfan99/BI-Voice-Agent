@@ -40,10 +40,12 @@ class CleanRowListener:
         self.producer = KafkaMessageProducer()
         self.batch_size = batch_size
         
-        # Initialize ClickHouse client
+        # Initialize ClickHouse client using NATIVE protocol
+        # IMPORTANT: ETL loader uses clickhouse_driver (native TCP on port 9000)
+        # This is DIFFERENT from Django HTTP queries (port 8123)
         clickhouse_config = {
             "host": os.getenv("CLICKHOUSE_HOST", "clickhouse"),
-            "port": int(os.getenv("CLICKHOUSE_PORT", "9000")),
+            "port": int(os.getenv("CLICKHOUSE_PORT", "9000")),  # Native protocol port
             "user": os.getenv("CLICKHOUSE_USER", "default"),
             "password": os.getenv("CLICKHOUSE_PASSWORD", ""),
             "database": os.getenv("CLICKHOUSE_DATABASE", "etl")

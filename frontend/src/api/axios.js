@@ -9,7 +9,7 @@ const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true,
+  // withCredentials removed - not needed for JWT authentication
 })
 
 // Request interceptor - Add JWT token to requests

@@ -22,14 +22,17 @@ class LoaderLogic:
 
     def __init__(self, config: Dict[str, Any]):
         """
-        Initialize loader logic.
+        Initialize loader logic using ClickHouse native protocol.
+        
+        IMPORTANT: Uses clickhouse_driver (native TCP protocol on port 9000).
+        This is DIFFERENT from HTTP queries which use port 8123.
         
         Args:
             config: Configuration dictionary with ClickHouse connection details
         """
         self.client = ClickHouseClient(
             host=config.get("host", "clickhouse"),
-            port=config.get("port", 9000),
+            port=config.get("port", 9000),  # Native protocol port
             user=config.get("user", "default"),
             password=config.get("password", ""),
             database=config.get("database", "default"),

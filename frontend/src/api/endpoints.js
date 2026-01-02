@@ -103,10 +103,51 @@ export const databaseAPI = {
   deleteDatabase: () => apiClient.delete('/database/'),
 }
 
+// ============================================================================
+// Voice Reports Endpoints
+// ============================================================================
+
+export const voiceReportsAPI = {
+  // Health check
+  healthCheck: () => apiClient.get('/voice-reports/health/'),
+  
+  // Upload audio file (Manager)
+  uploadAudio: (audioFile, onUploadProgress) => {
+    const formData = new FormData()
+    formData.append('audio', audioFile)
+    
+    return apiClient.post('/voice-reports/upload/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      onUploadProgress,
+    })
+  },
+  
+  // Execute SQL query (Manager/Analyst)
+  executeQuery: (reportId) => apiClient.post(`/voice-reports/${reportId}/execute/`),
+  
+  // Edit SQL query (Analyst only)
+  editSQL: (reportId, sql) => apiClient.put(`/voice-reports/${reportId}/sql/`, { sql }),
+  
+  // List all reports
+  listReports: () => apiClient.get('/voice-reports/reports/'),
+  
+  // Get report details
+  getReport: (reportId) => apiClient.get(`/voice-reports/${reportId}/`),
+  
+  // Delete report (Manager only)
+  deleteReport: (reportId) => apiClient.delete(`/voice-reports/${reportId}/`),
+  
+  // Get workspace dashboard (Executive)
+  getWorkspaceDashboard: () => apiClient.get('/voice-reports/dashboard/'),
+}
+
 export default {
   auth: authAPI,
   user: userAPI,
   workspace: workspaceAPI,
   database: databaseAPI,
+  voiceReports: voiceReportsAPI,
 }
 

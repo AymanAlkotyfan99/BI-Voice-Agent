@@ -23,11 +23,14 @@ class ClickHouseClient:
 
     def __init__(self, host, port=9000, user="default", password="", database="default"):
         """
-        Initialize ClickHouse client.
+        Initialize ClickHouse client using NATIVE protocol (clickhouse_driver).
+        
+        IMPORTANT: This uses the native TCP protocol which requires port 9000.
+        This is DIFFERENT from HTTP queries which use port 8123.
         
         Args:
             host: ClickHouse host
-            port: ClickHouse port (default: 9000)
+            port: ClickHouse native protocol port (default: 9000)
             user: Username
             password: Password
             database: Database name

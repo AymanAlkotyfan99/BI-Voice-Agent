@@ -361,11 +361,33 @@ class LogoutSerializer(serializers.Serializer):
 
 class ProfileSerializer(serializers.ModelSerializer):
     """Serializer for viewing user profile."""
+    workspace = serializers.SerializerMethodField()
     
     class Meta:
         model = User
-        fields = ['id', 'name', 'email', 'role', 'is_verified', 'is_active', 'created_at']
-        read_only_fields = ['id', 'role', 'is_verified', 'is_active', 'created_at']
+        fields = ['id', 'name', 'email', 'role', 'is_verified', 'is_active', 'created_at', 'workspace']
+        read_only_fields = ['id', 'role', 'is_verified', 'is_active', 'created_at', 'workspace']
+    
+    def get_workspace(self, obj):
+        """Get workspace info based on user role."""
+        if obj.role == 'manager':
+            # Manager: return owned workspace
+            workspace = obj.owned_workspaces.first()
+            if workspace:
+                return {
+                    'id': workspace.id,
+                    'name': workspace.name,
+                }
+            return None
+        else:
+            # Analyst or Executive: return first active workspace
+            membership = obj.workspace_memberships.filter(status='active').first()
+            if membership:
+                return {
+                    'id': membership.workspace.id,
+                    'name': membership.workspace.name,
+                }
+            return None
 
 
 class UpdateProfileSerializer(serializers.Serializer):

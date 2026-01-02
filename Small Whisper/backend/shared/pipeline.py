@@ -3,12 +3,14 @@ from shared.intent_sanitizer import sanitize_intent
 from shared.sql_compiler import compile_sql
 from shared.sql_validator import validate_sql
 from shared.chart_recommender import recommend_chart
+from shared.intent_validator import perform_multi_pass_validation
 from reasoning_app.runner import run_reasoning
 
 
 def process_question(question: str):
     """
     Full analytical pipeline: Intent → SQL → Chart
+    WITH STRICT MULTI-PASS VALIDATION
     """
     result = extract_intent(question)
 
@@ -30,9 +32,111 @@ def process_question(question: str):
         question
     )
 
-    sql = compile_sql(intent)
+    # ✅ FIRST SQL GENERATION (may need reconstruction)
+    sql_initial = compile_sql(intent)
     
-    # ✅ VALIDATE SQL BEFORE RETURNING
+    # ✅ MULTI-PASS VALIDATION
+    print("\n" + "="*60)
+    print("🔍 PERFORMING MULTI-PASS VALIDATION")
+    print("="*60)
+    
+    validation_result = perform_multi_pass_validation(intent, sql_initial, question, schema)
+    
+    # Log validation results
+    print(f"\n📊 Validation Summary:")
+    print(f"   Pass 1 (Intent): {'✅ PASS' if validation_result['pass1']['valid'] else '❌ FAIL'}")
+    print(f"   Pass 2 (Schema): {'✅ PASS' if validation_result['pass2']['valid'] else '❌ FAIL'}")
+    print(f"   Pass 3 (SQL):    {'✅ PASS' if validation_result['pass3']['valid'] else '❌ FAIL'}")
+    
+    if validation_result["overall_warnings"]:
+        print(f"\n⚠️  Warnings ({len(validation_result['overall_warnings'])}):")
+        for warning in validation_result["overall_warnings"]:
+            print(f"   • {warning}")
+    
+    if not validation_result["valid"]:
+        print(f"\n❌ Issues ({len(validation_result['overall_issues'])}):")
+        for issue in validation_result["overall_issues"]:
+            print(f"   • {issue}")
+    
+    # ✅ RECONSTRUCT SQL IF NEEDED (with re-validation loop)
+    sql = sql_initial
+    reconstruction_count = 0
+    max_reconstructions = 2  # Prevent infinite loops
+    
+    while validation_result["requires_reconstruction"] and reconstruction_count < max_reconstructions:
+        reconstruction_count += 1
+        print(f"\n🔧 SQL reconstruction required (Attempt {reconstruction_count})")
+        
+        type_casting_needed = validation_result.get("type_casting_needed", [])
+        if type_casting_needed:
+            print(f"   Applying {len(type_casting_needed)} type cast(s):")
+            for tc in type_casting_needed:
+                print(f"   • {tc['column']} ({tc['current_type']}) → {tc['required_cast']}")
+            
+            # Recompile SQL with type casting
+            sql = compile_sql(intent, type_casting=type_casting_needed)
+            print(f"\n✅ SQL reconstructed with type casting")
+            
+            # 🔧 RE-VALIDATION LOOP: Validate again after auto-repair
+            print(f"\n🔄 Re-validating after auto-repair...")
+            validation_result = perform_multi_pass_validation(intent, sql, question, schema)
+            
+            print(f"   Pass 1 (Intent):  {'✅ PASS' if validation_result['pass1']['valid'] else '❌ FAIL'}")
+            print(f"   Pass 2 (Schema):  {'✅ PASS' if validation_result['pass2']['valid'] else '❌ FAIL'}")
+            print(f"   Pass 3 (SQL):     {'✅ PASS' if validation_result['pass3']['valid'] else '❌ FAIL'}")
+            
+            if validation_result["valid"]:
+                print(f"✅ Re-validation PASSED")
+                break
+        else:
+            # No type casting, but reconstruction needed - might be semantic issue
+            break
+    
+    # After reconstruction attempts, check for critical semantic failures
+    if validation_result["requires_reconstruction"]:
+        # Still has issues after reconstruction attempts
+        print(f"\n🔧 SQL reconstruction did not resolve all issues")
+        
+        # 🔴 STRICT MODE: If semantic validation failed, REFUSE
+        if not validation_result["pass1"]["valid"]:
+            semantic_issues = [i for i in validation_result["overall_issues"] if "[Intent]" in i]
+            # Exclude auto-repair warnings
+            critical_semantic = [i for i in semantic_issues if "auto-repaired" not in i.lower()]
+            
+            if critical_semantic:
+                error_msg = "Semantic validation failed: " + "; ".join(critical_semantic)
+                print(f"\n❌ {error_msg}")
+                print(f"🔴 REFUSING to generate semantically incorrect SQL")
+                return {
+                    "error": True,
+                    "message": error_msg,
+                    "requires_clarification": True,
+                    "validation": validation_result
+                }
+        
+        # If there are still critical issues, refuse execution
+        if not validation_result["valid"]:
+            critical_issues = [i for i in validation_result["overall_issues"] 
+                             if "domain mismatch" in i.lower() or "generic" in i.lower()]
+            if critical_issues:
+                error_msg = "Critical validation failures: " + "; ".join(critical_issues)
+                print(f"\n❌ {error_msg}")
+                print(f"🔴 REFUSING to generate misleading SQL")
+                return {
+                    "error": True,
+                    "message": error_msg,
+                    "requires_clarification": True,
+                    "validation": validation_result
+                }
+            
+            print(f"\n⚠️  WARNING: SQL generated but validation issues remain")
+            print(f"   This query may not fully match user intent")
+    else:
+        print(f"\n✅ SQL validation passed - no reconstruction needed")
+    
+    print("="*60 + "\n")
+    
+    # ✅ FINAL SQL VALIDATION BEFORE RETURNING
     try:
         validate_sql(sql)
     except ValueError as e:
@@ -43,14 +147,34 @@ def process_question(question: str):
     
     chart = recommend_chart(intent)
 
-    # ✅ CALCULATE CONFIDENCE
+    # ✅ CALCULATE CONFIDENCE (adjusted for auto-repair and validation)
     confidence = _calculate_confidence(intent, question, schema)
-
+    
+    # 🔧 Reduce confidence for auto-repaired metrics
+    has_auto_repair = any(m.get("_auto_repaired") for m in intent.get("metrics", []))
+    has_weak_match = any(m.get("_weak_match") for m in intent.get("metrics", []))
+    
+    if has_weak_match:
+        confidence *= 0.6  # Significant reduction for weak matches
+        print("⚠️  Confidence reduced: Weak semantic match in auto-repair")
+    elif has_auto_repair:
+        confidence *= 0.85  # Minor reduction for strong auto-repair
+        print("⚠️  Confidence adjusted: Auto-repair applied")
+    
+    # Reduce confidence if validation warnings exist
+    if validation_result["overall_warnings"]:
+        confidence *= 0.9
+    
     return {
         "intent": intent,
         "sql": sql,
         "chart": chart,
-        "confidence": confidence
+        "confidence": confidence,
+        "validation": {
+            "passed": validation_result["valid"],
+            "warnings": validation_result["overall_warnings"],
+            "reconstructed": validation_result["requires_reconstruction"]
+        }
     }
 
 
@@ -255,6 +379,22 @@ def process_after_whisper(text: str):
 
     try:
         llm_stage = process_question(text)
+    except ValueError as e:
+        # 🔴 STRICT MODE: Semantic alignment failure
+        # Return clarification request instead of generic result
+        error_msg = str(e)
+        if "Semantic alignment failure" in error_msg:
+            print(f"⚠️ CLARIFICATION REQUIRED: {error_msg}")
+            reasoning["message"] = f"Clarification needed: {error_msg}"
+            reasoning["requires_clarification"] = True
+            reasoning["clarification_reason"] = "semantic_alignment_failure"
+            return reasoning, None
+        else:
+            # Other validation errors
+            print(f"❌ {error_msg}")
+            reasoning["message"] = f"Analytical stage failed: {error_msg}"
+            reasoning["analytical_error"] = error_msg
+            return reasoning, None
     except Exception as e:
         # ✅ Show actual error instead of misleading message
         error_msg = f"Analytical stage failed: {str(e)}"

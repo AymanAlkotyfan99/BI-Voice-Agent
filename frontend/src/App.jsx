@@ -18,6 +18,9 @@ import InviteMember from './pages/workspace/InviteMember'
 import AcceptInvite from './pages/workspace/AcceptInvite'
 import Dashboard from './pages/dashboard/Dashboard'
 import DatabaseManagement from './pages/database/DatabaseManagement'
+import VoiceReportManager from './pages/voice-reports/VoiceReportManager'
+import SQLEditor from './pages/voice-reports/SQLEditor'
+import DashboardViewer from './pages/voice-reports/DashboardViewer'
 
 // Protected Route Component
 function PrivateRoute({ children, roles }) {
@@ -69,6 +72,32 @@ function App() {
             element={
               <PrivateRoute roles={['manager']}>
                 <DatabaseManagement />
+              </PrivateRoute>
+            }
+          />
+          
+          {/* Voice Reports Routes */}
+          <Route
+            path="voice-reports"
+            element={
+              <PrivateRoute roles={['manager']}>
+                <VoiceReportManager />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="sql-editor"
+            element={
+              <PrivateRoute roles={['analyst']}>
+                <SQLEditor />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="analytics"
+            element={
+              <PrivateRoute roles={['executive']}>
+                <DashboardViewer />
               </PrivateRoute>
             }
           />
