@@ -2,7 +2,12 @@
 Small Whisper Client
 
 Calls the existing Small Whisper service as a black box.
-Sends audio → Receives transcription + intent + SQL
+Sends audio → Receives transcription + reasoning + intent (+ SQL if analytical)
+
+IMPORTANT:
+- Small Whisper returns INTENT, not always SQL
+- SQL is only generated for analytical questions
+- This client must handle both analytical and conversational responses
 """
 
 import requests
@@ -60,26 +65,32 @@ class SmallWhisperClient:
             logger.error(f"Health check FAILED: Unexpected error - {str(e)}")
             return False
     
-    def process_audio(self, audio_file) -> Dict:
+    def process_audio(self, audio_file, user_id=None, user_email=None) -> Dict:
         """
-        Send audio to Small Whisper and get back transcription + SQL.
+        Send audio to Small Whisper and get back transcription + reasoning + intent/SQL.
         
         Args:
             audio_file: Audio file (Django UploadedFile or file path)
+            user_id: ID of the authenticated user (optional, for logging only)
+            user_email: Email of the authenticated user (optional, for logging only)
         
         Returns:
             dict: {
                 'success': bool,
                 'text': transcription text,
-                'intent': intent object,
-                'sql': generated SQL query,
-                'reasoning': reasoning result (if available),
+                'reasoning': reasoning result with question_type,
+                'intent': intent object (if analytical),
+                'sql': generated SQL query (if analytical),
+                'chart': chart recommendation (if analytical),
+                'question_type': 'analytical' | 'conversational',
                 'error': error message (if failed)
             }
         """
         # Pre-flight health check
         logger.info("=== Starting Small Whisper Request ===")
         logger.info(f"Target URL: {self.transcribe_endpoint}")
+        if user_id:
+            logger.info(f"User ID: {user_id}, User Email: {user_email}")
         
         if not self.check_health():
             error_msg = f"Small Whisper service is not reachable at {self.base_url}. Please ensure it is running on port 8001."
@@ -107,10 +118,18 @@ class SmallWhisperClient:
             
             logger.info(f"📤 Sending audio to Small Whisper: {self.transcribe_endpoint}")
             
+            # Prepare form data with user information
+            data = {
+                'user_id': user_id,
+            }
+            if user_email:
+                data['user_email'] = user_email
+            
             # Call Small Whisper endpoint with explicit timeout
             response = requests.post(
                 self.transcribe_endpoint,
                 files=files,
+                data=data,  # Pass user information
                 timeout=90  # Increased timeout for Whisper processing
             )
             
@@ -145,20 +164,81 @@ class SmallWhisperClient:
             
             # Extract data from Small Whisper response
             # Small Whisper returns: {text, reasoning, llm}
-            # llm contains: {intent, sql}
+            # - text: transcription
+            # - reasoning: {question_type, needs_sql, needs_chart, message?}
+            # - llm: {intent, sql, chart} OR null (for conversational questions)
+            
+            # DEFENSIVE VALIDATION: Ensure result is a valid dictionary
+            if not result or not isinstance(result, dict):
+                error_msg = "Small Whisper returned no result or invalid response"
+                logger.error(f"❌ {error_msg}")
+                raise RuntimeError(error_msg)
             
             text = result.get('text', '')
-            sql = result.get('llm', {}).get('sql', '')
+            reasoning = result.get('reasoning', {})
+            llm_data = result.get('llm')  # Can be null for conversational questions
+            
+            # Extract question type from reasoning
+            question_type = reasoning.get('question_type', 'unknown')
+            needs_sql = reasoning.get('needs_sql', False)
             
             logger.info(f"📝 Transcription: {text[:100]}...")
-            logger.info(f"🔍 SQL Generated: {sql[:100]}...")
+            logger.info(f"🔍 Question Type: {question_type}")
+            logger.info(f"🔍 Needs SQL: {needs_sql}")
+            
+            # Handle conversational questions (no SQL needed)
+            if not needs_sql or question_type != 'analytical':
+                logger.info("ℹ️ Conversational question - no SQL generation needed")
+                return {
+                    'success': True,
+                    'text': text,
+                    'reasoning': reasoning,
+                    'question_type': question_type,
+                    'intent': None,
+                    'sql': None,
+                    'chart': None,
+                    'message': reasoning.get('message', 'Question does not require data analysis'),
+                    'raw_response': result
+                }
+            
+            # Handle analytical questions (SQL expected)
+            if not llm_data or not isinstance(llm_data, dict):
+                # Analytical question but LLM stage failed
+                error_msg = reasoning.get('message', 'Analytical stage failed')
+                logger.warning(f"⚠️ {error_msg}")
+                return {
+                    'success': True,  # Not a system error, just no SQL
+                    'text': text,
+                    'reasoning': reasoning,
+                    'question_type': question_type,
+                    'intent': None,
+                    'sql': None,
+                    'chart': None,
+                    'message': error_msg,
+                    'analytical_error': reasoning.get('analytical_error'),
+                    'raw_response': result
+                }
+            
+            # Extract intent, SQL, and chart from llm_data
+            intent = llm_data.get('intent')
+            sql = llm_data.get('sql')
+            chart = llm_data.get('chart')
+            confidence = llm_data.get('confidence', 0.5)
+            
+            if sql:
+                logger.info(f"🔍 SQL Generated: {sql[:100]}...")
+            else:
+                logger.info("ℹ️ No SQL generated")
             
             return {
                 'success': True,
                 'text': text,
-                'reasoning': result.get('reasoning'),
-                'intent': result.get('llm', {}).get('intent'),
+                'reasoning': reasoning,
+                'question_type': question_type,
+                'intent': intent,
                 'sql': sql,
+                'chart': chart,
+                'confidence': confidence,
                 'raw_response': result
             }
         

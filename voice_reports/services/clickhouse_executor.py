@@ -5,8 +5,7 @@ Executes validated SQL queries on ClickHouse.
 Returns results for visualization.
 """
 
-import requests
-import json
+import clickhouse_connect
 import os
 import logging
 from typing import Dict, List, Optional
@@ -14,29 +13,68 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def sanitize_sql_for_http(sql: str) -> str:
+    """
+    Sanitize SQL for ClickHouse HTTP execution.
+    
+    Removes incompatible syntax:
+    - FORMAT Native (not supported via HTTP)
+    - Semicolons (causes multi-statement errors)
+    - Extra whitespace
+    
+    Args:
+        sql: Raw SQL string (possibly from LLM)
+    
+    Returns:
+        Clean SQL safe for HTTP execution
+    """
+    if not sql:
+        return ""
+    
+    # Remove FORMAT Native (case-insensitive)
+    import re
+    clean_sql = re.sub(r'\s+FORMAT\s+Native\s*', ' ', sql, flags=re.IGNORECASE)
+    
+    # Remove all semicolons
+    clean_sql = clean_sql.replace(';', '')
+    
+    # Remove extra whitespace and trim
+    clean_sql = ' '.join(clean_sql.split())
+    clean_sql = clean_sql.strip()
+    
+    return clean_sql
+
+
 class ClickHouseExecutor:
     """
-    Execute SELECT queries on ClickHouse.
+    Execute SELECT queries on ClickHouse using HTTP protocol (port 8123).
     Returns results in format suitable for Metabase/visualization.
     """
     
     def __init__(self):
         """Initialize ClickHouse executor with environment configuration."""
         self.host = os.getenv('CLICKHOUSE_HOST', 'localhost')
-        self.port = os.getenv('CLICKHOUSE_PORT', '8123')
+        self.port = int(os.getenv('CLICKHOUSE_PORT', '8123'))
         self.user = os.getenv('CLICKHOUSE_USER', 'etl_user')
         self.password = os.getenv('CLICKHOUSE_PASSWORD', 'etl_pass123')
         self.database = os.getenv('CLICKHOUSE_DATABASE', 'etl')
         
         # Validate port for HTTP protocol
-        if self.port == '9000':
+        if self.port == 9000:
             logger.warning(
                 "⚠️  CLICKHOUSE_PORT is set to 9000 (native protocol). "
                 "HTTP interface requires port 8123. "
                 "Update your .env file: CLICKHOUSE_PORT=8123"
             )
         
-        self.base_url = f'http://{self.host}:{self.port}'
+        # Create clickhouse-connect client
+        self.client = clickhouse_connect.get_client(
+            host=self.host,
+            port=self.port,
+            username=self.user,
+            password=self.password,
+            database=self.database
+        )
     
     def execute_query(self, sql: str) -> Dict:
         """
@@ -59,61 +97,25 @@ class ClickHouseExecutor:
             import time
             start_time = time.time()
             
-            logger.info(f"Executing query on ClickHouse: {sql[:100]}...")
+            # Sanitize SQL for HTTP execution (removes FORMAT Native, semicolons)
+            clean_sql = sanitize_sql_for_http(sql)
             
-            # Build request parameters
-            params = {
-                'query': sql,
-                'database': self.database,
-                'default_format': 'JSONEachRow'
-            }
+            logger.info(f"Executing query on ClickHouse: {clean_sql[:100]}...")
             
-            if self.user:
-                params['user'] = self.user
-            if self.password:
-                params['password'] = self.password
-            
-            # Execute query
-            response = requests.post(
-                self.base_url,
-                params=params,
-                timeout=30
-            )
+            # Execute query using clickhouse-connect
+            result = self.client.query(clean_sql)
             
             execution_time_ms = int((time.time() - start_time) * 1000)
             
-            if response.status_code != 200:
-                error_text = response.text
-                logger.error(f"ClickHouse error: {response.status_code} - {error_text}")
-                
-                # Special handling for port misconfiguration
-                if 'Port 9000 is for clickhouse-client' in error_text:
-                    return {
-                        'success': False,
-                        'error': (
-                            'ClickHouse port misconfiguration detected. '
-                            'Port 9000 is for native protocol (clickhouse-client). '
-                            'HTTP queries require port 8123. '
-                            'Please update CLICKHOUSE_PORT=8123 in your .env file and restart the server.'
-                        )
-                    }
-                
-                return {
-                    'success': False,
-                    'error': f"ClickHouse error: {error_text[:200]}"
-                }
-            
-            # Parse results
+            # Convert result to list of dicts
             rows = []
-            columns = set()
+            columns = result.column_names
             
-            for line in response.text.strip().split('\n'):
-                if line:
-                    row = json.loads(line)
-                    rows.append(row)
-                    columns.update(row.keys())
-            
-            columns = list(columns)
+            for row in result.result_rows:
+                row_dict = {}
+                for i, col_name in enumerate(columns):
+                    row_dict[col_name] = row[i]
+                rows.append(row_dict)
             
             logger.info(f"Query successful: {len(rows)} rows in {execution_time_ms}ms")
             
@@ -125,32 +127,23 @@ class ClickHouseExecutor:
                 'execution_time_ms': execution_time_ms
             }
         
-        except requests.exceptions.ConnectionError:
-            logger.error("Cannot connect to ClickHouse")
-            return {
-                'success': False,
-                'error': 'ClickHouse is not reachable. Please ensure it is running.'
-            }
-        
-        except requests.exceptions.Timeout:
-            logger.error("ClickHouse query timed out")
-            return {
-                'success': False,
-                'error': 'Query timeout. Try simplifying the query.'
-            }
-        
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse ClickHouse response: {e}")
-            return {
-                'success': False,
-                'error': 'Invalid response from ClickHouse'
-            }
-        
         except Exception as e:
-            logger.error(f"Error executing query: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"ClickHouse query error: {error_msg}")
+            
+            # Special handling for port misconfiguration
+            if 'Port 9000 is for clickhouse-client' in error_msg or 'Connection refused' in error_msg:
+                return {
+                    'success': False,
+                    'error': (
+                        'ClickHouse connection error. '
+                        'Ensure ClickHouse is running and CLICKHOUSE_PORT=8123 is set in .env file.'
+                    )
+                }
+            
             return {
                 'success': False,
-                'error': f"Execution error: {str(e)}"
+                'error': f"Query execution failed: {error_msg[:200]}"
             }
     
     def test_connection(self) -> bool:

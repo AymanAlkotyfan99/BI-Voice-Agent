@@ -23,3 +23,4 @@ tiktoken
 pydantic
 
 clickhouse-driver
+clickhouse-connect

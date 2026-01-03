@@ -5,6 +5,7 @@ API endpoints for voice-driven BI system.
 Orchestrates Small Whisper, ClickHouse, and Metabase.
 """
 
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -89,9 +90,17 @@ class VoiceUploadView(APIView):
             
             logger.info(f"Audio file saved: {audio_path}")
             
-            # Call Small Whisper
+            # Call Small Whisper with authenticated user information
             whisper_client = get_small_whisper_client()
-            whisper_result = whisper_client.process_audio(audio_path)
+            user = request.user
+            
+            # Pass user_id and user_email to Small Whisper
+            # Fixed: User authentication now properly passed to prevent 401 errors
+            whisper_result = whisper_client.process_audio(
+                audio_file=audio_path,
+                user_id=user.id,
+                user_email=user.email
+            )
             
             if not whisper_result['success']:
                 return Response(
@@ -102,15 +111,31 @@ class VoiceUploadView(APIView):
                     status=status.HTTP_503_SERVICE_UNAVAILABLE
                 )
             
-            # Create report record
+            # Extract question type and SQL
+            question_type = whisper_result.get('question_type', 'unknown')
+            sql = whisper_result.get('sql')
+            
+            # Handle conversational questions (no SQL needed)
+            if question_type != 'analytical' or not sql:
+                logger.info(f"Conversational question detected: {whisper_result.get('message')}")
+                return Response({
+                    'success': True,
+                    'transcription': whisper_result['text'],
+                    'question_type': question_type,
+                    'message': whisper_result.get('message', 'Question does not require data analysis'),
+                    'intent': whisper_result.get('intent'),
+                    'requires_sql': False
+                })
+            
+            # Create report record for analytical questions only
             report = VoiceReport.objects.create(
                 workspace=workspace,
                 created_by=request.user,
                 audio_file=audio_path,
                 transcription=whisper_result['text'],
                 intent_json=whisper_result.get('intent'),
-                generated_sql=whisper_result['sql'],
-                final_sql=whisper_result['sql'],  # Initially same
+                generated_sql=sql,
+                final_sql=sql,  # Initially same
                 status='pending_execution'
             )
             
@@ -131,8 +156,11 @@ class VoiceUploadView(APIView):
                 'success': True,
                 'report_id': report.id,
                 'transcription': whisper_result['text'],
+                'question_type': question_type,
                 'intent': whisper_result.get('intent'),
-                'sql': whisper_result['sql'],
+                'sql': sql,
+                'chart': whisper_result.get('chart'),
+                'confidence': whisper_result.get('confidence'),
                 'message': 'Audio processed successfully. Ready to execute.'
             })
         
