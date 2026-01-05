@@ -15,6 +15,23 @@ model = whisper.load_model(
 
 @csrf_exempt
 def transcribe_view(request):
+    """
+    STATELESS AI Worker Endpoint
+    
+    This endpoint is intentionally stateless:
+    - NO authentication required
+    - NO user context needed
+    - NO JWT validation
+    - NO database writes
+    
+    It simply:
+    1. Receives audio file
+    2. Transcribes using Whisper
+    3. Generates intent + SQL (if analytical)
+    4. Returns JSON response
+    
+    All authentication and user management is handled by the Main BI Backend (port 8000).
+    """
     if request.method == "POST":
         audio_file = request.FILES.get("audio")
         if not audio_file:

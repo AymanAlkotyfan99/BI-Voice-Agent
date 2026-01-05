@@ -1,18 +1,26 @@
 from openai import OpenAI
+from openai import APIError, AuthenticationError
+import os
 
 # ============================================================
 # 🔐 OpenRouter Configuration
+# STATELESS: No user context, no Django auth, pure API call
 # ============================================================
 
-OPENROUTER_API_KEY = "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"
-OPENROUTER_MODEL = "google/gemma-3n-e4b-it:free"
+# Load API key from environment variable (preferred) or use hardcoded fallback
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-3n-e4b-it:free")
 
+# STATELESS CLIENT: No user information, no authentication headers
+# This is a pure AI worker - only needs API key for OpenRouter
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
     default_headers={
-        "HTTP-Referer": "http://localhost",   # أي قيمة
-        "X-Title": "BI Voice Agent",           # اسم مشروعك
+        "HTTP-Referer": "http://localhost",   # Required by OpenRouter
+        "X-Title": "BI Voice Agent",           # Project identifier
+        # NO Authorization header - OpenRouter uses api_key parameter
+        # NO user_id or user_email - completely stateless
     }
 )
 
@@ -23,16 +31,44 @@ client = OpenAI(
 def call_llm(prompt: str) -> str:
     """
     Call LLM via OpenRouter.
-    Same interface as Ollama version.
-    Returns raw text response.
+    
+    STATELESS: This function does NOT use any Django user context.
+    It is a pure AI worker that only needs the prompt text.
+    
+    Args:
+        prompt: The text prompt to send to the LLM
+        
+    Returns:
+        Raw text response from the LLM
+        
+    Raises:
+        ValueError: If OpenRouter API key is invalid or expired
+        RuntimeError: For other API errors
     """
-    response = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.0,
-        max_tokens=500,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=OPENROUTER_MODEL,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.0,
+            max_tokens=500,
+        )
 
-    return response.choices[0].message.content
+        return response.choices[0].message.content
+    
+    except AuthenticationError as e:
+        # OpenRouter API key is invalid or expired
+        # This is NOT a Django authentication issue
+        error_msg = f"OpenRouter API authentication failed: {str(e)}. Please check OPENROUTER_API_KEY."
+        raise ValueError(error_msg) from e
+    
+    except APIError as e:
+        # Other OpenRouter API errors
+        error_msg = f"OpenRouter API error: {str(e)}"
+        raise RuntimeError(error_msg) from e
+    
+    except Exception as e:
+        # Unexpected errors
+        error_msg = f"LLM service error: {str(e)}"
+        raise RuntimeError(error_msg) from e

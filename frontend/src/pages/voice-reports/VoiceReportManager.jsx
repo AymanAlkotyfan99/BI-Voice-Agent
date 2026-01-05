@@ -91,7 +91,35 @@ function VoiceReportManager() {
         return
       }
 
-      const reportId = response.data.report_id
+      const reportId = response.data.report_id || response.data.id
+
+      // Validate report_id exists before proceeding
+      if (!reportId) {
+        toast.error('Upload succeeded but no report ID was returned. Please try again.')
+        setIsUploading(false)
+        setIsExecuting(false)
+        setProcessingPhase('')
+        return
+      }
+
+      // Check if this is a conversational question (no SQL)
+      if (response.data.requires_sql === false || !response.data.sql) {
+        toast.success('Audio transcribed! This appears to be a conversational question and does not require data analysis.')
+        setCurrentReport({
+          id: reportId,
+          transcription: response.data.transcription,
+          sql: null,
+          intent: response.data.intent,
+          status: 'uploaded',
+          message: response.data.message
+        })
+        setSelectedFile(null)
+        loadReports()
+        setIsUploading(false)
+        setIsExecuting(false)
+        setProcessingPhase('')
+        return
+      }
 
       // Phase 2: Generating Query
       setProcessingPhase('generating')

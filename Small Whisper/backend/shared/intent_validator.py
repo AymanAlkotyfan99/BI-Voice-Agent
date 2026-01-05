@@ -426,6 +426,17 @@ def validate_sql_executability(sql: str, intent: dict, schema: dict) -> dict:
     if intent.get("dimensions") and intent.get("metrics"):
         if "GROUP BY" not in sql_upper:
             issues.append("Aggregation with dimensions requires GROUP BY clause")
+        else:
+            # 🔴 CRITICAL: Validate GROUP BY has actual content (not empty)
+            group_by_index = sql_upper.find("GROUP BY")
+            if group_by_index >= 0:
+                after_group_by = sql_upper[group_by_index + 8:].strip()
+                # Check if GROUP BY is followed immediately by ORDER BY, LIMIT, or semicolon
+                if after_group_by.startswith(("ORDER BY", "LIMIT", ";")):
+                    issues.append("GROUP BY clause is empty - dimensions were filtered out but GROUP BY remains")
+                # Check if GROUP BY has only whitespace or commas
+                elif not after_group_by or after_group_by.startswith(",") or after_group_by.replace(",", "").strip() == "":
+                    issues.append("GROUP BY clause is malformed - contains no valid columns")
     
     return {
         "valid": len(issues) == 0,

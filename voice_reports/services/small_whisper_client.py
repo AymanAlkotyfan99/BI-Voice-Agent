@@ -65,14 +65,15 @@ class SmallWhisperClient:
             logger.error(f"Health check FAILED: Unexpected error - {str(e)}")
             return False
     
-    def process_audio(self, audio_file, user_id=None, user_email=None) -> Dict:
+    def process_audio(self, audio_file) -> Dict:
         """
         Send audio to Small Whisper and get back transcription + reasoning + intent/SQL.
         
+        STATELESS: This service does NOT require or use user authentication.
+        It is a pure AI worker that processes audio → text → SQL.
+        
         Args:
             audio_file: Audio file (Django UploadedFile or file path)
-            user_id: ID of the authenticated user (optional, for logging only)
-            user_email: Email of the authenticated user (optional, for logging only)
         
         Returns:
             dict: {
@@ -89,8 +90,6 @@ class SmallWhisperClient:
         # Pre-flight health check
         logger.info("=== Starting Small Whisper Request ===")
         logger.info(f"Target URL: {self.transcribe_endpoint}")
-        if user_id:
-            logger.info(f"User ID: {user_id}, User Email: {user_email}")
         
         if not self.check_health():
             error_msg = f"Small Whisper service is not reachable at {self.base_url}. Please ensure it is running on port 8001."
@@ -118,18 +117,13 @@ class SmallWhisperClient:
             
             logger.info(f"📤 Sending audio to Small Whisper: {self.transcribe_endpoint}")
             
-            # Prepare form data with user information
-            data = {
-                'user_id': user_id,
-            }
-            if user_email:
-                data['user_email'] = user_email
+            # STATELESS: Small Whisper does NOT need user information
+            # It is a pure AI worker - no authentication, no user context
             
             # Call Small Whisper endpoint with explicit timeout
             response = requests.post(
                 self.transcribe_endpoint,
                 files=files,
-                data=data,  # Pass user information
                 timeout=90  # Increased timeout for Whisper processing
             )
             

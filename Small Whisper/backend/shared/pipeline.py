@@ -1,3 +1,4 @@
+import logging
 from llm_app.intent_service import extract_intent
 from shared.intent_sanitizer import sanitize_intent
 from shared.sql_compiler import compile_sql
@@ -5,6 +6,8 @@ from shared.sql_validator import validate_sql
 from shared.chart_recommender import recommend_chart
 from shared.intent_validator import perform_multi_pass_validation
 from reasoning_app.runner import run_reasoning
+
+logger = logging.getLogger(__name__)
 
 
 def process_question(question: str):
@@ -31,6 +34,15 @@ def process_question(question: str):
         schema,
         question
     )
+    
+    # 🔴 CRITICAL: Validate dimensions before SQL generation
+    # If dimensions were filtered out during sanitization, ensure intent reflects this
+    if intent.get("dimensions"):
+        valid_dims = [d for d in intent.get("dimensions", []) if d and isinstance(d, str) and d.strip()]
+        if not valid_dims:
+            # All dimensions filtered out - remove to prevent empty GROUP BY
+            intent["dimensions"] = []
+            print("⚠️  WARNING: All dimensions filtered out during sanitization - GROUP BY will be omitted")
 
     # ✅ FIRST SQL GENERATION (may need reconstruction)
     sql_initial = compile_sql(intent)
@@ -72,6 +84,16 @@ def process_question(question: str):
             print(f"   Applying {len(type_casting_needed)} type cast(s):")
             for tc in type_casting_needed:
                 print(f"   • {tc['column']} ({tc['current_type']}) → {tc['required_cast']}")
+            
+            # 🔴 CRITICAL: Validate intent still has dimensions before reconstruction
+            # If dimensions were filtered out, GROUP BY should not be added
+            if intent.get("dimensions"):
+                # Ensure dimensions are non-empty after filtering
+                valid_dims = [d for d in intent.get("dimensions", []) if d and isinstance(d, str) and d.strip()]
+                if not valid_dims:
+                    # Dimensions were filtered out - remove from intent to prevent empty GROUP BY
+                    intent["dimensions"] = []
+                    print("⚠️  WARNING: All dimensions filtered out - GROUP BY will be omitted")
             
             # Recompile SQL with type casting
             sql = compile_sql(intent, type_casting=type_casting_needed)
@@ -143,6 +165,26 @@ def process_question(question: str):
         return {
             "error": True,
             "message": f"SQL validation failed: {str(e)}"
+        }
+    
+    # 🔍 FINAL SQL STRUCTURE VALIDATION
+    # Ensure SQL is syntactically valid before returning
+    # This is the LAST line of defense before SQL is sent to ClickHouse
+    from shared.sql_compiler import _validate_sql_structure
+    try:
+        _validate_sql_structure(sql)
+    except ValueError as e:
+        print(f"\n❌ SQL structure validation failed: {str(e)}")
+        print(f"Generated SQL: {sql}")
+        # Log the exact SQL that failed validation
+        logger.error("🚨 INVALID SQL DETECTED BEFORE EXECUTION:")
+        logger.error("="*80)
+        logger.error(sql)
+        logger.error("="*80)
+        logger.error(f"Validation error: {str(e)}")
+        return {
+            "error": True,
+            "message": f"SQL structure invalid: {str(e)}"
         }
     
     chart = recommend_chart(intent)
@@ -395,12 +437,38 @@ def process_after_whisper(text: str):
             reasoning["message"] = f"Analytical stage failed: {error_msg}"
             reasoning["analytical_error"] = error_msg
             return reasoning, None
-    except Exception as e:
-        # ✅ Show actual error instead of misleading message
-        error_msg = f"Analytical stage failed: {str(e)}"
+    except ValueError as e:
+        # LLM authentication/configuration errors (OpenRouter API key issues)
+        error_str = str(e)
+        if "OpenRouter API authentication" in error_str or "401" in error_str:
+            # This is an OpenRouter API key issue, NOT Django authentication
+            error_msg = f"LLM service configuration error: {error_str}. This is an OpenRouter API key issue, not a user authentication problem."
+        else:
+            error_msg = f"Analytical stage failed: {error_str}"
         print(f"❌ {error_msg}")
         reasoning["message"] = error_msg
-        reasoning["analytical_error"] = str(e)
+        reasoning["analytical_error"] = error_str
+        reasoning["error_type"] = "llm_configuration" if "OpenRouter" in error_str else "validation"
+        return reasoning, None
+    
+    except RuntimeError as e:
+        # LLM service errors (OpenRouter API issues)
+        error_str = str(e)
+        error_msg = f"LLM service error: {error_str}"
+        print(f"❌ {error_msg}")
+        reasoning["message"] = error_msg
+        reasoning["analytical_error"] = error_str
+        reasoning["error_type"] = "llm_service"
+        return reasoning, None
+    
+    except Exception as e:
+        # ✅ Show actual error instead of misleading message
+        error_str = str(e)
+        error_msg = f"Analytical stage failed: {error_str}"
+        print(f"❌ {error_msg}")
+        reasoning["message"] = error_msg
+        reasoning["analytical_error"] = error_str
+        reasoning["error_type"] = "unknown"
         return reasoning, None
     
     if llm_stage.get("error"):

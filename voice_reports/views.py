@@ -53,6 +53,12 @@ class VoiceUploadView(APIView):
     Upload audio file and get transcription + generated SQL from Small Whisper.
     
     Manager only.
+    
+    ARCHITECTURAL SEPARATION:
+    - This endpoint (Main BI Backend) handles ALL authentication and user validation
+    - Small Whisper Backend (port 8001) is a STATELESS AI worker
+    - Small Whisper receives ONLY audio file, returns ONLY data (no user context)
+    - This endpoint ALWAYS returns a valid report_id (even for conversational questions)
     """
     permission_classes = [IsAuthenticated, IsManager]
     parser_classes = [MultiPartParser, FormParser]
@@ -90,17 +96,9 @@ class VoiceUploadView(APIView):
             
             logger.info(f"Audio file saved: {audio_path}")
             
-            # Call Small Whisper with authenticated user information
+            # Call Small Whisper (STATELESS - no user context needed)
             whisper_client = get_small_whisper_client()
-            user = request.user
-            
-            # Pass user_id and user_email to Small Whisper
-            # Fixed: User authentication now properly passed to prevent 401 errors
-            whisper_result = whisper_client.process_audio(
-                audio_file=audio_path,
-                user_id=user.id,
-                user_email=user.email
-            )
+            whisper_result = whisper_client.process_audio(audio_file=audio_path)
             
             if not whisper_result['success']:
                 return Response(
@@ -115,29 +113,33 @@ class VoiceUploadView(APIView):
             question_type = whisper_result.get('question_type', 'unknown')
             sql = whisper_result.get('sql')
             
-            # Handle conversational questions (no SQL needed)
-            if question_type != 'analytical' or not sql:
-                logger.info(f"Conversational question detected: {whisper_result.get('message')}")
-                return Response({
-                    'success': True,
-                    'transcription': whisper_result['text'],
-                    'question_type': question_type,
-                    'message': whisper_result.get('message', 'Question does not require data analysis'),
-                    'intent': whisper_result.get('intent'),
-                    'requires_sql': False
-                })
-            
-            # Create report record for analytical questions only
+            # ALWAYS create a report record, even for conversational questions
+            # This ensures we always return a valid report_id
             report = VoiceReport.objects.create(
                 workspace=workspace,
                 created_by=request.user,
                 audio_file=audio_path,
                 transcription=whisper_result['text'],
                 intent_json=whisper_result.get('intent'),
-                generated_sql=sql,
-                final_sql=sql,  # Initially same
-                status='pending_execution'
+                generated_sql=sql or '',  # Empty string if no SQL
+                final_sql=sql or '',  # Initially same
+                status='pending_execution' if (question_type == 'analytical' and sql) else 'uploaded'
             )
+            
+            # Handle conversational questions (no SQL needed)
+            if question_type != 'analytical' or not sql:
+                logger.info(f"Conversational question detected: {whisper_result.get('message')}")
+                return Response({
+                    'success': True,
+                    'id': report.id,  # Always return valid report_id
+                    'report_id': report.id,  # For backward compatibility
+                    'transcription': whisper_result['text'],
+                    'question_type': question_type,
+                    'message': whisper_result.get('message', 'Question does not require data analysis'),
+                    'intent': whisper_result.get('intent'),
+                    'requires_sql': False,
+                    'status': 'uploaded'
+                })
             
             # TODO: Create history entry when ReportHistory model is added
             # ReportHistory.objects.create(
@@ -154,14 +156,16 @@ class VoiceUploadView(APIView):
             
             return Response({
                 'success': True,
-                'report_id': report.id,
+                'id': report.id,  # Always return valid report_id
+                'report_id': report.id,  # For backward compatibility
                 'transcription': whisper_result['text'],
                 'question_type': question_type,
                 'intent': whisper_result.get('intent'),
                 'sql': sql,
                 'chart': whisper_result.get('chart'),
                 'confidence': whisper_result.get('confidence'),
-                'message': 'Audio processed successfully. Ready to execute.'
+                'message': 'Audio processed successfully. Ready to execute.',
+                'status': 'pending_execution'
             })
         
         except Exception as e:
@@ -182,6 +186,14 @@ class QueryExecuteView(APIView):
     
     def post(self, request, report_id):
         try:
+            # Validate report_id is not None/undefined
+            if report_id is None:
+                logger.error("QueryExecuteView called with None report_id")
+                return Response(
+                    {'success': False, 'error': 'Invalid report_id: report_id cannot be null or undefined'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             # Get report
             workspace = get_user_workspace(request.user)
             if not workspace:
@@ -195,6 +207,14 @@ class QueryExecuteView(APIView):
                 id=report_id,
                 workspace=workspace
             )
+            
+            # Validate report has SQL to execute
+            if not report.final_sql or not report.final_sql.strip():
+                logger.warning(f"Report {report_id} has no SQL to execute")
+                return Response(
+                    {'success': False, 'error': 'This report does not contain a SQL query. It may be a conversational question.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
             # Validate permissions
             if request.user.role not in ['manager', 'analyst']:

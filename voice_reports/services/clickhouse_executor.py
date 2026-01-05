@@ -100,7 +100,12 @@ class ClickHouseExecutor:
             # Sanitize SQL for HTTP execution (removes FORMAT Native, semicolons)
             clean_sql = sanitize_sql_for_http(sql)
             
-            logger.info(f"Executing query on ClickHouse: {clean_sql[:100]}...")
+            # 🔍 FINAL SQL BOUNDARY LOGGING (MANDATORY)
+            # This logs the EXACT query sent to ClickHouse
+            logger.error("🚨 FINAL SQL SENT TO CLICKHOUSE:")
+            logger.error("="*80)
+            logger.error(clean_sql)
+            logger.error("="*80)
             
             # Execute query using clickhouse-connect
             result = self.client.query(clean_sql)
