@@ -14,8 +14,8 @@ class ClickHouseClient:
     def __init__(self):
         self.host = getattr(settings, 'CLICKHOUSE_HOST', 'localhost')
         self.port = getattr(settings, 'CLICKHOUSE_PORT', '8123')
-        self.user = getattr(settings, 'CLICKHOUSE_USER', 'default')
-        self.password = getattr(settings, 'CLICKHOUSE_PASSWORD', '')
+        self.user = getattr(settings, 'CLICKHOUSE_USER', 'etl_user')
+        self.password = getattr(settings, 'CLICKHOUSE_PASSWORD', 'etl_pass123')
         self.base_url = f'http://{self.host}:{self.port}'
     
     def execute_query(self, query):

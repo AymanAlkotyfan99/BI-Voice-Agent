@@ -393,10 +393,10 @@ CLICKHOUSE_DATABASE = os.environ.get('CLICKHOUSE_DATABASE', 'etl')
 
 # Metabase Configuration
 METABASE_URL = os.environ.get('METABASE_URL', 'http://localhost:3000')
-METABASE_SECRET_KEY = os.environ.get('METABASE_SECRET_KEY', '')
+METABASE_SECRET_KEY = os.environ.get('METABASE_SECRET_KEY', 'b1abade2a5822ad12387ccc097c63cafcbdcaa2844dc76a4bdbfec15d06592f8')
 METABASE_DATABASE_ID = int(os.environ.get('METABASE_DATABASE_ID', '1'))
-METABASE_USERNAME = os.environ.get('METABASE_USERNAME', '')
-METABASE_PASSWORD = os.environ.get('METABASE_PASSWORD', '')
+METABASE_USERNAME = os.environ.get('METABASE_USERNAME', 'Aymannk331@gmail.com')
+METABASE_PASSWORD = os.environ.get('METABASE_PASSWORD', 'massanasri2482003')
 
 # JWT Embedding
 JWT_ISSUER = os.environ.get('JWT_ISSUER', 'bi-voice-agent')

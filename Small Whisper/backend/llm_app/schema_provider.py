@@ -45,30 +45,38 @@ def get_query_clickhouse_client():
     )
 
 def get_schema() -> dict:
-    client = get_query_clickhouse_client()
-    
-    # Query to fetch schema
-    schema_query = """
-        SELECT database, table, name, type
-        FROM system.columns
-        WHERE database = 'etl'
-        ORDER BY database, table;
     """
-    
-    # Sanitize before execution
+    Load ClickHouse schema for the active database.
+
+    IMPORTANT DESIGN RULE:
+    - Schema exposes TABLE NAMES ONLY (no database, no schema)
+    - Database context is handled by the ClickHouse connection itself
+    """
+
+    client = get_query_clickhouse_client()
+
+    # Fetch schema for the active database only
+    schema_query = """
+        SELECT table, name, type
+        FROM system.columns
+        WHERE database = currentDatabase()
+        ORDER BY table;
+    """
+
+    # Sanitize before execution (HTTP-safe)
     clean_query = sanitize_sql_for_http(schema_query)
     result = client.query(clean_query)
     rows = result.result_rows
 
     schema = {}
 
-    for db, table, column, col_type in rows:
-        full_table = f"{db}.{table}"
-        schema.setdefault(full_table, []).append({
+    for table, column, col_type in rows:
+        schema.setdefault(table, []).append({
             "name": column,
             "type": col_type
         })
 
+    # Debug output (optional but recommended)
     print("\n--- CLICKHOUSE SCHEMA WITH TYPES LOADED ---")
     for table, columns in schema.items():
         print(f"\n{table}")
@@ -76,7 +84,6 @@ def get_schema() -> dict:
             print(f"  - {col['name']} ({col['type']})")
 
     return schema
-
 
 
 def is_question_matching_schema(question: str, schema: dict) -> bool:
