@@ -6,7 +6,12 @@ from .clickhouse_executor import (
     sanitize_numeric_value
 )
 from .sql_guard import SQLGuard
-from .metabase_service import MetabaseService, get_metabase_service
+from .metabase_service import (
+    MetabaseService,
+    get_metabase_service,
+    get_metabase_session,
+    get_metabase_headers,
+)
 from .jwt_embedding import JWTEmbeddingService, get_jwt_service
 
 __all__ = [
@@ -19,6 +24,8 @@ __all__ = [
     'SQLGuard',
     'MetabaseService',
     'get_metabase_service',
+    'get_metabase_session',
+    'get_metabase_headers',
     'JWTEmbeddingService',
     'get_jwt_service',
 ]

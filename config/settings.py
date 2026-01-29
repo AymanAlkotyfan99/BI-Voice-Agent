@@ -388,19 +388,40 @@ ETL_SERVICE_URL = os.environ.get('ETL_SERVICE_URL', 'http://127.0.0.1:8001')
 # Use 127.0.0.1 instead of localhost to avoid DNS resolution issues
 SMALL_WHISPER_URL = os.environ.get('SMALL_WHISPER_URL', 'http://127.0.0.1:8001')
 
-# ClickHouse Database (for Voice Reports)
-CLICKHOUSE_DATABASE = os.environ.get('CLICKHOUSE_DATABASE', 'etl')
+# ===============================
+# ClickHouse
+# ===============================
 
-# Metabase Configuration
-METABASE_URL = os.environ.get('METABASE_URL', 'http://localhost:3000')
-METABASE_SECRET_KEY = os.environ.get('METABASE_SECRET_KEY', 'b1abade2a5822ad12387ccc097c63cafcbdcaa2844dc76a4bdbfec15d06592f8')
-METABASE_DATABASE_ID = int(os.environ.get('METABASE_DATABASE_ID', '1'))
-METABASE_USERNAME = os.environ.get('METABASE_USERNAME', 'Aymannk331@gmail.com')
-METABASE_PASSWORD = os.environ.get('METABASE_PASSWORD', 'massanasri2482003')
+CLICKHOUSE_DATABASE = os.environ.get("CLICKHOUSE_DATABASE", "etl")
 
-# JWT Embedding
-JWT_ISSUER = os.environ.get('JWT_ISSUER', 'bi-voice-agent')
-JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE', 'metabase')
+# ===============================
+# Metabase (Self-Hosted ONLY)
+# Session Auth – no Cloud, no API keys
+# ===============================
+
+METABASE_URL = os.environ.get("METABASE_URL", "http://127.0.0.1:3000")
+
+METABASE_USERNAME = os.environ.get("METABASE_USERNAME")
+METABASE_PASSWORD = os.environ.get("METABASE_PASSWORD")
+
+if not METABASE_USERNAME or not METABASE_PASSWORD:
+    raise RuntimeError(
+        "METABASE_USERNAME and METABASE_PASSWORD must be set for Session Auth"
+    )
+
+# This MUST match the database ID of ClickHouse inside Metabase UI
+METABASE_DATABASE_ID = int(os.environ.get("METABASE_DATABASE_ID", "2"))
+
+# ===============================
+# Optional: JWT Embedding (Self-Hosted only)
+# ===============================
+
+# Only needed if you embed dashboards/questions in an iframe
+# (Admin > Settings > Embedding > Secret Key)
+METABASE_SECRET_KEY = os.environ.get("METABASE_SECRET_KEY")
+
+JWT_ISSUER = os.environ.get("JWT_ISSUER", "bi-voice-agent")
+JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "metabase")
 
 # Media Files (for audio storage)
 MEDIA_URL = '/media/'

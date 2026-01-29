@@ -1,8 +1,9 @@
 """
-JWT Embedding Service
+JWT Embedding Service (Metabase Self-Hosted)
 
-Generates secure JWT tokens for Metabase embedding.
-CRITICAL SECURITY: Tokens are short-lived and signed server-side only.
+Generates JWT tokens for Metabase embedded dashboards/questions.
+Uses the same secret as configured in Metabase Admin > Settings > Embedding.
+Optional: only needed if you use embedded iframes; API uses Session Auth only.
 """
 
 import jwt
@@ -16,26 +17,27 @@ logger = logging.getLogger(__name__)
 
 class JWTEmbeddingService:
     """
-    JWT token generation for secure Metabase embedding.
-    
-    Security Features:
-    - HS256 algorithm
-    - Short-lived tokens (10 minutes)
-    - Server-side signing only
-    - Workspace-scoped parameters
+    JWT token generation for Metabase self-hosted embedding.
+    Requires METABASE_SECRET_KEY to match Metabase Admin embedding secret.
     """
     
     def __init__(self):
-        """Initialize JWT service with secret key from environment."""
-        self.secret_key = os.getenv('b1abade2a5822ad12387ccc097c63cafcbdcaa2844dc76a4bdbfec15d06592f8')
-        self.issuer = os.getenv('JWT_ISSUER', 'bi-voice-agent')
-        self.audience = os.getenv('JWT_AUDIENCE', 'metabase')
-        self.metabase_url = os.getenv('METABASE_URL', 'http://localhost:3000')
+        """Initialize from environment (METABASE_SECRET_KEY optional)."""
+        self.secret_key = os.getenv("METABASE_SECRET_KEY")
+        self.issuer = os.getenv("JWT_ISSUER", "bi-voice-agent")
+        self.audience = os.getenv("JWT_AUDIENCE", "metabase")
+        self.metabase_url = (os.getenv("METABASE_URL") or "http://localhost:3000").rstrip("/")
         
         if not self.secret_key:
-            logger.error("METABASE_SECRET_KEY not set - JWT signing will fail")
-            raise ValueError("METABASE_SECRET_KEY environment variable is required")
+            logger.debug("METABASE_SECRET_KEY not set - embedding URLs will not be signed")
     
+    def _ensure_secret(self) -> None:
+        if not self.secret_key:
+            raise ValueError(
+                "METABASE_SECRET_KEY is not set. Set it in .env to match "
+                "Metabase Admin > Settings > Embedding secret for JWT embedding."
+            )
+
     def generate_embed_token(self, resource: Dict, params: Optional[Dict] = None,
                             exp_minutes: int = 10) -> str:
         """
@@ -50,49 +52,30 @@ class JWTEmbeddingService:
             str: JWT token
         
         Raises:
-            ValueError: If resource is invalid
+            ValueError: If resource is invalid or METABASE_SECRET_KEY not set
         """
-        try:
-            # Validate resource
-            if not isinstance(resource, dict):
-                raise ValueError("Resource must be a dictionary")
-            
-            if 'type' not in resource or 'id' not in resource:
-                raise ValueError("Resource must have 'type' and 'id'")
-            
-            if resource['type'] not in ['dashboard', 'question']:
-                raise ValueError("Resource type must be 'dashboard' or 'question'")
-            
-            # Build JWT payload
-            current_time = int(time.time())
-            
-            payload = {
-                'resource': resource,
-                'params': params or {},
-                'iat': current_time,  # Issued at
-                'exp': current_time + (exp_minutes * 60),  # Expiration
-                'iss': self.issuer,  # Issuer
-                'aud': self.audience  # Audience
-            }
-            
-            # Sign token
-            token = jwt.encode(
-                payload,
-                self.secret_key,
-                algorithm='HS256'
-            )
-            
-            logger.info(f"Generated JWT token for {resource['type']} {resource['id']}")
-            
-            # Handle both string and bytes return from jwt.encode
-            if isinstance(token, bytes):
-                token = token.decode('utf-8')
-            
-            return token
-        
-        except Exception as e:
-            logger.error(f"Failed to generate JWT token: {e}")
-            raise
+        self._ensure_secret()
+        if not isinstance(resource, dict):
+            raise ValueError("Resource must be a dictionary")
+        if "type" not in resource or "id" not in resource:
+            raise ValueError("Resource must have 'type' and 'id'")
+        if resource["type"] not in ("dashboard", "question"):
+            raise ValueError("Resource type must be 'dashboard' or 'question'")
+
+        current_time = int(time.time())
+        payload = {
+            "resource": resource,
+            "params": params or {},
+            "iat": current_time,
+            "exp": current_time + (exp_minutes * 60),
+            "iss": self.issuer,
+            "aud": self.audience,
+        }
+        token = jwt.encode(payload, self.secret_key, algorithm="HS256")
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+        logger.info("Generated JWT token for %s %s", resource["type"], resource["id"])
+        return token
     
     def generate_dashboard_token(self, dashboard_id: int, params: Optional[Dict] = None) -> str:
         """
@@ -122,107 +105,65 @@ class JWTEmbeddingService:
         resource = {'type': 'question', 'id': question_id}
         return self.generate_embed_token(resource, params)
     
-    def get_embed_url(self, resource_type: str, resource_id: int, 
-                     params: Optional[Dict] = None) -> str:
+    def get_embed_url(self, resource_type: str, resource_id: int,
+                      params: Optional[Dict] = None) -> str:
         """
-        Get full embed URL with JWT token.
-        
-        Args:
-            resource_type: 'dashboard' or 'question'
-            resource_id: Resource ID
-            params: Optional parameters
-        
-        Returns:
-            str: Full embed URL with JWT token
+        Get full embed URL with JWT token (requires METABASE_SECRET_KEY).
         """
-        try:
-            # Generate token
-            resource = {'type': resource_type, 'id': resource_id}
-            token = self.generate_embed_token(resource, params)
-            
-            # Build embed URL
-            embed_url = f"{self.metabase_url}/embed/{resource_type}/{token}"
-            
-            # Add theme parameter if needed
-            if params and 'theme' in params:
-                embed_url += f"#theme={params['theme']}"
-            
-            logger.info(f"Generated embed URL for {resource_type} {resource_id}")
-            
-            return embed_url
-        
-        except Exception as e:
-            logger.error(f"Failed to generate embed URL: {e}")
-            raise
+        resource = {"type": resource_type, "id": resource_id}
+        token = self.generate_embed_token(resource, params)
+        embed_url = f"{self.metabase_url}/embed/{resource_type}/{token}"
+        if params and "theme" in params:
+            embed_url += f"#theme={params['theme']}"
+        logger.info("Generated embed URL for %s %s", resource_type, resource_id)
+        return embed_url
     
-    def get_dashboard_embed_url(self, dashboard_id: int, 
-                               workspace_id: Optional[int] = None) -> str:
+    def get_dashboard_embed_url(self, dashboard_id: int,
+                                workspace_id: Optional[int] = None) -> str:
         """
-        Get dashboard embed URL with workspace filtering.
-        
-        Args:
-            dashboard_id: Metabase dashboard ID
-            workspace_id: Optional workspace ID for filtering
-        
-        Returns:
-            str: Dashboard embed URL
+        Dashboard URL: JWT embed if METABASE_SECRET_KEY set, else direct Metabase URL.
         """
         params = {}
         if workspace_id:
-            params['workspace_id'] = workspace_id
-        
-        return self.get_embed_url('dashboard', dashboard_id, params)
-    
+            params["workspace_id"] = workspace_id
+        try:
+            return self.get_embed_url("dashboard", dashboard_id, params)
+        except ValueError:
+            return f"{self.metabase_url}/dashboard/{dashboard_id}"
+
     def get_question_embed_url(self, question_id: int,
                               workspace_id: Optional[int] = None) -> str:
         """
-        Get question embed URL with workspace filtering.
-        
-        Args:
-            question_id: Metabase question ID
-            workspace_id: Optional workspace ID for filtering
-        
-        Returns:
-            str: Question embed URL
+        Question URL: JWT embed if METABASE_SECRET_KEY set, else direct Metabase URL.
         """
         params = {}
         if workspace_id:
-            params['workspace_id'] = workspace_id
-        
-        return self.get_embed_url('question', question_id, params)
+            params["workspace_id"] = workspace_id
+        try:
+            return self.get_embed_url("question", question_id, params)
+        except ValueError:
+            return f"{self.metabase_url}/question/{question_id}"
     
     def verify_token(self, token: str) -> Optional[Dict]:
-        """
-        Verify and decode JWT token.
-        
-        Args:
-            token: JWT token string
-        
-        Returns:
-            dict: Decoded payload or None if invalid
-        """
+        """Verify and decode JWT token; returns None if secret not set or invalid."""
+        if not self.secret_key:
+            return None
         try:
             payload = jwt.decode(
                 token,
                 self.secret_key,
-                algorithms=['HS256'],
+                algorithms=["HS256"],
                 audience=self.audience,
-                issuer=self.issuer
+                issuer=self.issuer,
             )
-            
-            logger.info("JWT token verified successfully")
             return payload
-        
         except jwt.ExpiredSignatureError:
             logger.warning("JWT token has expired")
             return None
-        
-        except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid JWT token: {e}")
+        except jwt.InvalidTokenError:
             return None
-        
         except Exception as e:
-            logger.error(f"JWT verification error: {e}")
+            logger.error("JWT verification error: %s", e)
             return None
     
     def is_token_expired(self, token: str) -> bool:

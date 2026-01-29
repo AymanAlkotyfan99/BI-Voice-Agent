@@ -142,10 +142,13 @@ SMALL_WHISPER_TIMEOUT=60
 # OpenAI API (for LLM)
 OPENAI_API_KEY=your-openai-api-key-here
 
-# Metabase Integration (Optional)
-METABASE_URL=http://localhost:3000
+# Metabase Self-Hosted (Session Auth; no Cloud, no API keys)
+METABASE_URL=http://127.0.0.1:3000
 METABASE_USERNAME=your_metabase_email
 METABASE_PASSWORD=your_metabase_password
+METABASE_DATABASE_ID=1
+# Optional: for JWT embedding (must match Metabase Admin > Embedding secret)
+# METABASE_SECRET_KEY=your-embedding-secret
 
 # CORS Settings
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
