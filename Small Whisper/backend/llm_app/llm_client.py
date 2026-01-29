@@ -8,7 +8,7 @@ import os
 # ============================================================
 
 # Load API key from environment variable (preferred) or use hardcoded fallback
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-3n-e4b-it:free")
 
 # STATELESS CLIENT: No user information, no authentication headers

@@ -249,7 +249,7 @@ EMAIL_USE_SSL = False
 
 # Gmail credentials from environment variables
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'Aymannk331@gmail.com')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'ysdxuwfnhxynplyh')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'mqpuayqohmgwnzgr')
 # Use friendly display name for all outgoing emails
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'BI Voice Agent <no-reply@bivoiceagent.com>')
 # The actual email used for SMTP (required by Gmail)
