@@ -1,18 +1,91 @@
-def compile_sql(intent: dict, type_casting: list = None) -> str:
+def _is_string_type(col_type: str) -> bool:
+    """Check if ClickHouse column type is a string type."""
+    if not col_type:
+        return False
+    col_type_lower = col_type.lower()
+    return "string" in col_type_lower or "char" in col_type_lower
+
+
+def _normalize_invalid_casts(sql: str) -> str:
+    """
+    Global fix: Replace invalid ClickHouse functions with valid ones.
+    toFloat64OrNullOrNull / toInt64OrNullOrNull do NOT exist in ClickHouse;
+    only toFloat64OrNull / toInt64OrNull are valid.
+    Apply to ALL generated SQL so double casting never reaches the engine.
+    """
+    if not sql:
+        return sql
+    sql = sql.replace("toFloat64OrNullOrNull(", "toFloat64OrNull(")
+    sql = sql.replace("toInt64OrNullOrNull(", "toInt64OrNull(")
+    return sql
+
+
+def _agg_to_agg_if(agg: str) -> str:
+    """Map aggregation to ClickHouse *If form: AVG→avgIf, SUM→sumIf, etc."""
+    m = {"AVG": "avgIf", "SUM": "sumIf", "MIN": "minIf", "MAX": "maxIf"}
+    return m.get(agg.upper(), agg.lower() + "If")
+
+
+def _normalize_cast_func_name(cast_func: str) -> str:
+    """Ensure cast function is valid ClickHouse (no double OrNull)."""
+    if not cast_func:
+        return cast_func
+    return cast_func.replace("toFloat64OrNullOrNull", "toFloat64OrNull").replace("toInt64OrNullOrNull", "toInt64OrNull")
+
+
+def _get_column_type(col_name: str, table: str, schema: dict) -> str:
+    """
+    Get column type from schema.
+    
+    Args:
+        col_name: Column name
+        table: Table name  
+        schema: Schema dict with structure {table: [{name, type}, ...]}
+    
+    Returns:
+        Column type string or empty string if not found
+    """
+    if not schema or table not in schema:
+        return ""
+    
+    columns = schema.get(table, [])
+    for col in columns:
+        if col.get("name") == col_name:
+            return col.get("type", "")
+    return ""
+
+
+def _build_safe_metric_filter(col: str, schema_type: str, has_explicit_cast: bool) -> str:
+    """
+    🔒 NaN-SAFE: Build WHERE clause filter for STRING columns with numeric aggregations.
+    
+    Returns WHERE clause condition or empty string if not needed.
+    
+    Pattern 1 (Row filtering - preferred):
+    WHERE toFloat64OrNull(column) IS NOT NULL
+    """
+    # Only add filter for STRING columns that need safe casting
+    if _is_string_type(schema_type) or has_explicit_cast:
+        return f"toFloat64OrNull({col}) IS NOT NULL"
+    return ""
+
+
+def compile_sql(intent: dict, type_casting: list = None, schema: dict = None) -> str:
     """
     Compile intent into SQL with optional type casting.
     
-    SYSTEMIC GUARANTEES:
-    - SELECT always has valid columns (no trailing commas)
-    - WHERE only added if filters contain valid conditions
-    - GROUP BY only added if dimensions exist
-    - ORDER BY only added if valid columns exist
-    - LIMIT only added if positive integer
-    - Final SQL is syntactically valid
+    🔒 NaN-SAFE SYSTEMIC GUARANTEES (global contract for ALL queries):
+    - STRING columns: safe cast exactly ONCE via toFloat64OrNull (never toFloat64OrNullOrNull)
+    - Numeric aggregations: avgIf/sumIf/minIf/maxIf with condition (expr IS NOT NULL)
+    - NaN guard: if(isNaN(aggIf(...)), 0, aggIf(...)) so result is never NaN
+    - Zero groups removed: outer SELECT ... FROM (inner) WHERE metric_alias != 0
+    - Invalid casts normalized: toFloat64OrNullOrNull → toFloat64OrNull in final SQL
+    - SELECT/WHERE/GROUP BY/ORDER BY/LIMIT validated; no empty clauses.
     
     Args:
         intent: Structured intent with metrics, dimensions, filters, etc.
         type_casting: Optional list of type casting requirements from validation
+        schema: Optional schema dict for automatic STRING column detection
     
     Returns:
         Valid SQL query string
@@ -56,39 +129,80 @@ def compile_sql(intent: dict, type_casting: list = None) -> str:
 
     # ---------------- Metrics ----------------
     metric_alias_map = {}
+    safe_metric_filters = []  # 🔒 NaN-SAFE: Collect WHERE conditions for STRING columns
+    numeric_agg_aliases = []  # Aliases for metrics that get final WHERE ... != 0
+
     for m in metrics:
         if not isinstance(m, dict):
             continue
-            
+
         col = m.get("column")
         agg = m.get("aggregation")
-        
+
         # Validate metric has required fields
         if not col or not agg:
             continue
-        
+
         # Validate aggregation is valid
         if agg.upper() not in ["SUM", "AVG", "MIN", "MAX", "COUNT"]:
             continue
-        
+
         alias = m.get("alias")
         if not alias or not isinstance(alias, str) or not alias.strip():
             alias = f"{agg.lower()}_{col}"
-        
+
         metric_alias_map[col] = alias
-        
+
         # Handle COUNT(*) specially
         if col == "*":
             select_parts.append(f"{agg.upper()}(*) AS {alias}")
         else:
-            # Apply type casting if needed
+            # 🔒 NaN-SAFE: Determine if column needs safe casting (exactly ONCE)
             col_expr = col
-            if col in cast_map:
-                cast_func = cast_map[col]
-                col_expr = f"{cast_func}({col})"
-                print(f"🔧 Type casting applied: {col} → {col_expr}")
-            
-            select_parts.append(f"{agg.upper()}({col_expr}) AS {alias}")
+            needs_safe_cast = False
+            has_explicit_cast = col in cast_map
+
+            # Check if column is STRING type from schema (automatic detection)
+            if schema:
+                col_type = _get_column_type(col, table, schema)
+                if _is_string_type(col_type) and agg.upper() in ["SUM", "AVG", "MIN", "MAX"]:
+                    needs_safe_cast = True
+                    print(f"🔧 Auto-detected STRING column: {col} ({col_type})")
+
+            # Apply explicit type casting if provided — NEVER double-apply OrNull
+            if has_explicit_cast:
+                cast_func = _normalize_cast_func_name(cast_map[col])
+                # If already safe (contains OrNull), use as-is to avoid toFloat64OrNullOrNull
+                if "OrNull" in cast_func:
+                    safe_cast_func = cast_func
+                else:
+                    safe_cast_func = cast_func.replace("toFloat64", "toFloat64OrNull").replace("toInt64", "toInt64OrNull")
+                col_expr = f"{safe_cast_func}({col})"
+                needs_safe_cast = True
+                print(f"🔧 Type casting applied (NaN-safe): {col} → {col_expr}")
+            elif needs_safe_cast:
+                # 🔒 Apply safe casting exactly ONCE
+                col_expr = f"toFloat64OrNull({col})"
+                print(f"🔧 Auto-casting STRING column (NaN-safe): {col} → {col_expr}")
+
+            # 🔒 WHERE filter for STRING columns (toFloat64OrNull(col) IS NOT NULL)
+            if needs_safe_cast and agg.upper() in ["SUM", "AVG", "MIN", "MAX"]:
+                filter_condition = f"toFloat64OrNull({col}) IS NOT NULL"
+                if filter_condition not in safe_metric_filters:
+                    safe_metric_filters.append(filter_condition)
+                    print(f"🔒 Adding NULL filter: {filter_condition}")
+
+            agg_upper = agg.upper()
+            if agg_upper in ["AVG", "SUM", "MIN", "MAX"]:
+                # Canonical pattern: *If + isNaN guard; zero groups removed in outer WHERE
+                agg_if = _agg_to_agg_if(agg_upper)
+                inner_agg = f"{agg_if}({col_expr}, {col_expr} IS NOT NULL)"
+                metric_expr = f"if(isNaN({inner_agg}), 0, {inner_agg}) AS {alias}"
+                select_parts.append(metric_expr)
+                numeric_agg_aliases.append(alias)
+            else:
+                # COUNT: no NaN/zero filtering
+                select_parts.append(f"{agg_upper}({col_expr}) AS {alias}")
 
     # Validate SELECT has at least one column
     if not select_parts:
@@ -129,6 +243,10 @@ def compile_sql(intent: dict, type_casting: list = None) -> str:
         
         where_clauses.append(f"{col.strip()} {op.strip().upper()} {val_formatted}")
     
+    # 🔒 NaN-SAFE: Add safe metric filters for STRING columns (Pattern 1)
+    # These filters exclude rows where STRING→Float conversion fails
+    where_clauses.extend(safe_metric_filters)
+    
     # Only add WHERE clause if we have valid conditions
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
@@ -144,43 +262,40 @@ def compile_sql(intent: dict, type_casting: list = None) -> str:
             final_group_by = [g.strip() for g in valid_group_by if g.strip()]
             if final_group_by:
                 sql += " GROUP BY " + ", ".join(final_group_by)
-            # If all dimensions were filtered out, DO NOT add GROUP BY
-            # This prevents "GROUP BY " with nothing after it
 
-    # ---------------- Order By ----------------
-    # Only add ORDER BY if we have valid order clauses
+    # ---------------- Order By (clauses only; appended below) ----------------
     order_clauses = []
     for o in order_by:
         if not isinstance(o, dict):
             continue
-        
         col = o.get("column")
         if not col or not isinstance(col, str) or not col.strip():
             continue
-        
-        # Use alias if ordering by metric, otherwise use column name
         col = metric_alias_map.get(col, col.strip())
         direction = o.get("direction", "ASC")
-        
-        # Validate direction
         if direction.upper() not in ["ASC", "DESC"]:
             direction = "ASC"
-        
         order_clauses.append(f"{col} {direction.upper()}")
-    
+
+    # ---------------- Wrap with outer WHERE != 0 when we have numeric aggregations ----------------
+    # Contract: frontend must never receive NaN, NULL, or zero-only groups.
+    if numeric_agg_aliases:
+        inner_sql = sql  # SELECT ... FROM ... WHERE ... GROUP BY ...
+        zero_filter = " AND ".join(f"{a} != 0" for a in numeric_agg_aliases)
+        sql = f"SELECT * FROM ({inner_sql}) WHERE {zero_filter}"
+
     # Only add ORDER BY if we have valid clauses
     if order_clauses:
         sql += " ORDER BY " + ", ".join(order_clauses)
 
     # ---------------- Limit ----------------
-    # Only add LIMIT if it's a positive integer
     if isinstance(limit, int) and limit > 0:
         sql += f" LIMIT {limit}"
 
-    # Final SQL validation
-    final_sql = sql + ";"
+    # Global fix: normalize invalid ClickHouse functions (e.g. toFloat64OrNullOrNull → toFloat64OrNull)
+    final_sql = _normalize_invalid_casts(sql + ";")
     _validate_sql_structure(final_sql)
-    
+
     return final_sql
 
 

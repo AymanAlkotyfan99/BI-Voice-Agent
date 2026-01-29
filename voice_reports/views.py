@@ -24,6 +24,7 @@ from .services import (
     get_metabase_service,
     get_jwt_service
 )
+from .services.clickhouse_executor import sanitize_query_results
 from users.permissions import IsManager, IsAnalyst, IsExecutive
 
 logger = logging.getLogger(__name__)
@@ -289,11 +290,41 @@ class QueryExecuteView(APIView):
                 )
             
             # Save query results
-            report.query_result = query_result['rows']
+            # 🔒 NaN-SAFE: Apply sanitization before saving to PostgreSQL JSONField
+            # This is defense-in-depth - results are already sanitized in executor,
+            # but we sanitize again here to ensure PostgreSQL storage never fails
+            sanitized_rows = sanitize_query_results(query_result['rows'])
+            report.query_result = sanitized_rows
             report.execution_time_ms = query_result['execution_time_ms']
             report.row_count = query_result['row_count']
             report.status = 'executed'
-            report.save()
+            
+            # 🔒 NaN-SAFE: Catch JSON serialization errors during save
+            # This is a final safety net in case any NaN/Infinity values slip through
+            try:
+                report.save()
+            except (ValueError, TypeError) as json_error:
+                # JSON serialization failed - likely NaN/Infinity in data
+                logger.error(f"JSON serialization error when saving report {report.id}: {json_error}")
+                logger.error(f"This indicates NaN/Infinity values weren't properly sanitized")
+                # Try one more sanitization pass and save again
+                sanitized_rows = sanitize_query_results(sanitized_rows)
+                report.query_result = sanitized_rows
+                try:
+                    report.save()
+                except Exception as final_error:
+                    # If it still fails after re-sanitization, return error
+                    report.status = 'failed'
+                    report.error_message = f"Data serialization error: {str(final_error)}"
+                    report.save()
+                    return Response(
+                        {
+                            'success': False,
+                            'error': 'Failed to save query results: invalid numeric values detected',
+                            'details': str(final_error)
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
             
             # Infer chart type
             chart_type = self._infer_chart_type(

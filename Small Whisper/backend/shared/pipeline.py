@@ -45,7 +45,8 @@ def process_question(question: str):
             print("⚠️  WARNING: All dimensions filtered out during sanitization - GROUP BY will be omitted")
 
     # ✅ FIRST SQL GENERATION (may need reconstruction)
-    sql_initial = compile_sql(intent)
+    # 🔒 NaN-SAFE: Pass schema for automatic STRING column detection
+    sql_initial = compile_sql(intent, schema=schema)
     
     # ✅ MULTI-PASS VALIDATION
     print("\n" + "="*60)
@@ -96,7 +97,8 @@ def process_question(question: str):
                     print("⚠️  WARNING: All dimensions filtered out - GROUP BY will be omitted")
             
             # Recompile SQL with type casting
-            sql = compile_sql(intent, type_casting=type_casting_needed)
+            # 🔒 NaN-SAFE: Pass schema for automatic STRING column detection
+            sql = compile_sql(intent, type_casting=type_casting_needed, schema=schema)
             print(f"\n✅ SQL reconstructed with type casting")
             
             # 🔧 RE-VALIDATION LOOP: Validate again after auto-repair

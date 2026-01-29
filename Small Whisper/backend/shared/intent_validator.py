@@ -416,8 +416,13 @@ def validate_sql_executability(sql: str, intent: dict, schema: dict) -> dict:
                 
                 # Check if aggregation on STRING without casting
                 if agg in {"AVG", "SUM"} and _is_string_type(col_type):
-                    # Check if SQL has explicit casting
-                    if f"toFloat64({col})" not in sql and f"toInt64({col})" not in sql:
+                    # Check if SQL has explicit casting (both safe and unsafe versions)
+                    # 🔒 NaN-SAFE: Also check for safe cast functions
+                    has_cast = (
+                        f"toFloat64({col})" in sql or f"toInt64({col})" in sql or
+                        f"toFloat64OrNull({col})" in sql or f"toInt64OrNull({col})" in sql
+                    )
+                    if not has_cast:
                         issues.append(
                             f"Aggregation {agg} on STRING column '{col}' requires explicit type casting"
                         )
@@ -465,16 +470,19 @@ def _is_numeric_type(col_type: str) -> bool:
 def _infer_target_cast(col_type: str, col_name: str) -> str:
     """
     Infer appropriate ClickHouse cast function based on column type and name.
+    
+    🔒 NaN-SAFE: Returns safe cast functions that return NULL instead of NaN.
+    The SQL compiler will use these to generate NaN-safe SQL.
     """
     col_name_lower = col_name.lower()
     
     # If column name suggests it should be integer
     integer_keywords = ("id", "count", "num", "qty", "quantity", "year", "age")
     if any(kw in col_name_lower for kw in integer_keywords):
-        return "toInt64"
+        return "toInt64OrNull"  # 🔒 Safe version returns NULL instead of throwing error
     
     # Default to float for numeric operations
-    return "toFloat64"
+    return "toFloat64OrNull"  # 🔒 Safe version returns NULL instead of NaN
 
 
 def perform_multi_pass_validation(intent: dict, sql: str, question: str, schema: dict) -> dict:

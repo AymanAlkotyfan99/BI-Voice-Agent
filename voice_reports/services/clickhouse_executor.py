@@ -8,9 +8,23 @@ Returns results for visualization.
 import clickhouse_connect
 import os
 import logging
-from typing import Dict, List, Optional
+import math
+from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_invalid_casts(sql: str) -> str:
+    """
+    Global fix: Replace invalid ClickHouse functions with valid ones.
+    toFloat64OrNullOrNull / toInt64OrNullOrNull do NOT exist in ClickHouse.
+    Applied at execution time so ALL queries (including those bypassing the compiler) are safe.
+    """
+    if not sql:
+        return sql
+    sql = sql.replace("toFloat64OrNullOrNull(", "toFloat64OrNull(")
+    sql = sql.replace("toInt64OrNullOrNull(", "toInt64OrNull(")
+    return sql
 
 
 def sanitize_sql_for_http(sql: str) -> str:
@@ -20,6 +34,7 @@ def sanitize_sql_for_http(sql: str) -> str:
     Removes incompatible syntax:
     - FORMAT Native (not supported via HTTP)
     - Semicolons (causes multi-statement errors)
+    - Invalid cast functions (toFloat64OrNullOrNull → toFloat64OrNull)
     - Extra whitespace
     
     Args:
@@ -30,19 +45,152 @@ def sanitize_sql_for_http(sql: str) -> str:
     """
     if not sql:
         return ""
-    
+
+    # Global fix: normalize invalid ClickHouse cast functions
+    sql = _normalize_invalid_casts(sql)
+
     # Remove FORMAT Native (case-insensitive)
     import re
     clean_sql = re.sub(r'\s+FORMAT\s+Native\s*', ' ', sql, flags=re.IGNORECASE)
-    
+
     # Remove all semicolons
     clean_sql = clean_sql.replace(';', '')
-    
+
     # Remove extra whitespace and trim
     clean_sql = ' '.join(clean_sql.split())
     clean_sql = clean_sql.strip()
-    
+
     return clean_sql
+
+
+def sanitize_numeric_value(value: Any) -> Any:
+    """
+    🔒 NaN-SAFE: Sanitize a single numeric value to ensure JSON compatibility.
+    
+    Replaces NaN, Infinity, and -Infinity with 0 (or None for NULL).
+    This ensures values can be safely stored in PostgreSQL JSON/JSONB fields
+    and serialized to JSON without errors.
+    
+    Handles all numeric types including:
+    - Python float, int
+    - Decimal (from ClickHouse Decimal types)
+    - numpy.float64, numpy.float32 (if numpy is used)
+    - Any other numeric type that can be converted to float
+    
+    Args:
+        value: Any value (numeric, string, None, etc.)
+    
+    Returns:
+        Sanitized value (NaN/Infinity → 0, None → None, other values unchanged)
+    """
+    # Handle None/NULL
+    if value is None:
+        return None
+    
+    # Handle Python int - never NaN/Infinity, return as-is
+    if isinstance(value, int):
+        return value
+    
+    # Handle float types (NaN, Infinity) - direct check
+    if isinstance(value, float):
+        if math.isnan(value):
+            return 0  # Replace NaN with 0
+        elif math.isinf(value):
+            return 0  # Replace Infinity/-Infinity with 0
+        return value
+    
+    # Handle Decimal types (ClickHouse returns Decimal for Decimal/Float64 columns)
+    # Decimal types can be converted to float for NaN/Infinity checking
+    try:
+        from decimal import Decimal
+        if isinstance(value, Decimal):
+            # Convert Decimal to float to check for NaN/Infinity
+            # Decimal('NaN') and Decimal('Infinity') exist but are rare
+            # Converting to float is the safest way to detect them
+            try:
+                float_val = float(value)
+                if math.isnan(float_val):
+                    return 0  # Replace NaN with 0
+                elif math.isinf(float_val):
+                    return 0  # Replace Infinity/-Infinity with 0
+                # Return as float for JSON compatibility (Decimal isn't JSON serializable)
+                return float_val
+            except (ValueError, OverflowError, TypeError):
+                # If conversion fails, return 0 as fallback
+                return 0
+    except ImportError:
+        # Decimal not available, skip this check
+        pass
+    
+    # Handle numpy types (if numpy is installed and used by clickhouse-connect)
+    try:
+        import numpy as np
+        if isinstance(value, (np.floating, np.integer)):
+            # Convert numpy numeric types to Python float for NaN/Infinity checking
+            float_val = float(value)
+            if math.isnan(float_val):
+                return 0  # Replace NaN with 0
+            elif math.isinf(float_val):
+                return 0  # Replace Infinity/-Infinity with 0
+            # Convert numpy types to Python native types for JSON serialization
+            if isinstance(value, np.integer):
+                return int(value)
+            return float_val
+    except (ImportError, ValueError, OverflowError, TypeError):
+        # numpy not available or conversion failed, continue to generic check
+        pass
+    
+    # Generic fallback: Try to convert any numeric-like value to float
+    # This catches edge cases where ClickHouse returns unusual numeric types
+    try:
+        # Only attempt conversion if value looks numeric (not strings, lists, etc.)
+        if not isinstance(value, (str, bytes, list, dict, tuple, bool)):
+            float_val = float(value)
+            if math.isnan(float_val):
+                return 0  # Replace NaN with 0
+            elif math.isinf(float_val):
+                return 0  # Replace Infinity/-Infinity with 0
+            # If conversion succeeded and no NaN/Infinity, return original value
+            # (to preserve type if it's JSON-serializable)
+    except (ValueError, TypeError, OverflowError):
+        # Conversion failed - value is not numeric, return as-is
+        pass
+    
+    # For non-numeric types (strings, lists, dicts, etc.), return as-is
+    return value
+
+
+def sanitize_query_results(rows: List[Dict]) -> List[Dict]:
+    """
+    🔒 NaN-SAFE: Sanitize query results to ensure JSON compatibility.
+    
+    Recursively sanitizes all numeric values in result rows, replacing
+    NaN, Infinity, and -Infinity with 0. This ensures results can be:
+    - Safely serialized to JSON
+    - Stored in PostgreSQL JSON/JSONB fields
+    - Sent to frontend/Metabase without errors
+    
+    Args:
+        rows: List of dictionaries representing query result rows
+    
+    Returns:
+        Sanitized list of dictionaries with all NaN/Infinity values replaced
+    """
+    sanitized_rows = []
+    
+    for row in rows:
+        sanitized_row = {}
+        for key, value in row.items():
+            # Recursively sanitize nested structures
+            if isinstance(value, dict):
+                sanitized_row[key] = sanitize_query_results([value])[0] if value else {}
+            elif isinstance(value, list):
+                sanitized_row[key] = [sanitize_numeric_value(item) for item in value]
+            else:
+                sanitized_row[key] = sanitize_numeric_value(value)
+        sanitized_rows.append(sanitized_row)
+    
+    return sanitized_rows
 
 
 class ClickHouseExecutor:
@@ -122,13 +270,17 @@ class ClickHouseExecutor:
                     row_dict[col_name] = row[i]
                 rows.append(row_dict)
             
-            logger.info(f"Query successful: {len(rows)} rows in {execution_time_ms}ms")
+            # 🔒 NaN-SAFE: Sanitize results to remove NaN/Infinity values
+            # This ensures JSON compatibility and PostgreSQL storage safety
+            sanitized_rows = sanitize_query_results(rows)
+            
+            logger.info(f"Query successful: {len(sanitized_rows)} rows in {execution_time_ms}ms")
             
             return {
                 'success': True,
-                'rows': rows,
+                'rows': sanitized_rows,
                 'columns': columns,
-                'row_count': len(rows),
+                'row_count': len(sanitized_rows),
                 'execution_time_ms': execution_time_ms
             }
         
